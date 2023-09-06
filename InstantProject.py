@@ -21,7 +21,7 @@ import os
 import bpy
 import bpy_extras
 #from bpy.props import PointerProperty, BoolProperty
-#import math 
+import math 
 #from mathutils import Vector
 #import mathutils
 from bpy_extras.image_utils import load_image
