@@ -22,7 +22,7 @@ import bpy
 import bpy_extras
 #from bpy.props import PointerProperty, BoolProperty
 import math 
-#from mathutils import Vector
+from mathutils import Vector
 #import mathutils
 from bpy_extras.image_utils import load_image
 #from pathlib import Path
@@ -55,6 +55,7 @@ def INSTANTPROJECT_FN_setShaders(nodes, links, image_file):
 	node_albedo.image = image_file
 
 	# Connections
+	link = links.new(node_HSV.outputs[0], node_principled_bsdf.inputs[0]) # HSV -> Principled BSDF
 	link = links.new(node_albedo.outputs[0], node_curves.inputs[1]) # Albedo -> Curves
 	link = links.new(node_curves.outputs[0], node_HSV.inputs[4]) # Curves -> HSV
 	link = links.new(node_principled_bsdf.outputs[0], material_output.inputs[0]) # Principled BSDF -> Material Output
@@ -64,6 +65,10 @@ def INSTANTPROJECT_FN_setShaders(nodes, links, image_file):
 	link = links.new(node_colorramp_roughness.outputs[0], node_principled_bsdf.inputs[9]) # ColorRamp Specular -> Color (Roughness)
 	link = links.new(node_HSV.outputs[0], node_bump.inputs[2]) # HSV -> Bump
 	link = links.new(node_bump.outputs[0], node_principled_bsdf.inputs[22]) # Bump -> Color (Bump)
+
+	# Default Values
+
+	node_bump.inputs[0].default_value = 0.2
 
 	# Node Positions
 	material_output.location = Vector((300.0, 0.0))
@@ -172,12 +177,15 @@ class INSTANTPROJECT_OT_projectImage(bpy.types.Operator):
 		return context.mode in ['PAINT_TEXTURE', 'OBJECT', 'EDIT_MESH']
 	
 	def execute(self, context):
-		active_object = bpy.context.active_object
+		if bpy.context.active_object is None:
+			self.report({"WARNING"}, 'Please select a Target Object.')
+			return{'CANCELLED'}					
 		if bpy.context.scene.camera is None:
 			self.report({"WARNING"}, "No active scene camera.")
 			return{'CANCELLED'}		
 		
 		# Safety Checks
+		active_object = bpy.context.active_object
 		camera = bpy.context.scene.camera
 		if camera.data.show_background_images == False or len(camera.data.background_images) == 0 or camera.data.background_images[0].image is None:
 			self.report({"WARNING"}, "No background image assigned to camera.")
@@ -274,7 +282,7 @@ class INSTANTPROJECT_PT_panelMain(bpy.types.Panel):
 	def draw(self, context):
 		layout = self.layout		
 
-class MATTEPAINTER_PT_panelCameraProjection(bpy.types.Panel):
+class INSTANTPROJECT_PT_panelCameraProjection(bpy.types.Panel):
 	bl_label = "Camera Projection"
 	bl_idname = "INSTANTPROJECT_PT_panelCameraProjection"
 	bl_space_type = 'VIEW_3D'
@@ -294,7 +302,7 @@ class MATTEPAINTER_PT_panelCameraProjection(bpy.types.Panel):
 		row.prop(context.scene, 'INSTANTPROJECT_VAR_projectResolution', text='Scale Factor')
 		button_project_image.project_resolution = context.scene.INSTANTPROJECT_VAR_projectResolution
 
-class MATTEPAINTER_PT_panelFileManagement(bpy.types.Panel):
+class INSTANTPROJECT_PT_panelFileManagement(bpy.types.Panel):
 	bl_label = "File Management"
 	bl_idname = "INSTANTPROJECT_PT_panelFileManagement"
 	bl_space_type = 'VIEW_3D'
@@ -315,9 +323,9 @@ class MATTEPAINTER_PT_panelFileManagement(bpy.types.Panel):
 
 classes = ()
 
-classes_interface = (MATTEPAINTER_PT_panelMain, MATTEPAINTER_PT_panelCameraProjection, MATTEPAINTER_PT_panelFileManagement)
-classes_functionality = (MATTEPAINTER_OT_saveAllImages, MATTEPAINTER_OT_clearUnused)
-classes_projection = (MATTEPAINTER_OT_setBackgroundImage, MATTEPAINTER_OT_matchBackgroundImageResolution, MATTEPAINTER_OT_clearBackgroundImages, MATTEPAINTER_OT_projectImage)
+classes_interface = (INSTANTPROJECT_PT_panelMain, INSTANTPROJECT_PT_panelCameraProjection, INSTANTPROJECT_PT_panelFileManagement)
+classes_functionality = (INSTANTPROJECT_OT_saveAllImages, INSTANTPROJECT_OT_clearUnused)
+classes_projection = (INSTANTPROJECT_OT_setBackgroundImage, INSTANTPROJECT_OT_matchBackgroundImageResolution, INSTANTPROJECT_OT_clearBackgroundImages, INSTANTPROJECT_OT_projectImage)
 
 def register():
 
@@ -330,7 +338,7 @@ def register():
 		bpy.utils.register_class(c)
 
 	# Variables
-	bpy.types.Scene.MATTEPAINTER_VAR_projectResolution = bpy.props.FloatProperty(name='MATTEPAINTER_VAR_projectResolution', default=0.25, soft_min=0.1, soft_max=1.0, description='Resolution scaling factor for projected texture.')
+	bpy.types.Scene.INSTANTPROJECT_VAR_projectResolution = bpy.props.FloatProperty(name='INSTANTPROJECT_VAR_projectResolution', default=0.25, soft_min=0.1, soft_max=1.0, description='Resolution scaling factor for projected texture.')
 
 			
 def unregister():
@@ -345,7 +353,7 @@ def unregister():
 	
 	# Variables
 
-	del bpy.types.Scene.MATTEPAINTER_VAR_projectResolution
+	del bpy.types.Scene.INSTANTPROJECT_VAR_projectResolution
 
 if __name__ == "__main__":
 	register()
