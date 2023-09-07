@@ -533,7 +533,10 @@ class INSTANTPROJECT_PT_panelDecalLayers(bpy.types.Panel):
 		button_load_decal_layer = row.operator(INSTANTPROJECT_OT_addDecalLayer.bl_idname, text='Load Decal', icon_value=727)
 		button_load_decal_layer.project_resolution = context.scene.INSTANTPROJECT_VAR_projectResolution				
 		button_unload_decal = row.operator(INSTANTPROJECT_OT_unloadDecal.bl_idname, text='Unload Decal', icon='CANCEL')
-		nodes = active_object.data.materials[0].node_tree.nodes
+		try:
+			nodes = active_object.data.materials[0].node_tree.nodes
+		except:
+			return
 		if nodes.get('instantproject_decal_mix') is not None:
 			button_hide_decal_layer = row.operator(INSTANTPROJECT_OT_toggleDecalVisibility.bl_idname, text='', icon='HIDE_ON' if nodes.get('instantproject_decal_mix').mute else 'HIDE_OFF')
 		button_remove_decal_layer = row.operator(INSTANTPROJECT_OT_removeDecalLayer.bl_idname, text='', icon_value=21)
