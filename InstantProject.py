@@ -20,16 +20,11 @@ bl_info = {
 import os
 import bpy
 import bpy_extras
-#from bpy.props import PointerProperty, BoolProperty
 import math 
 from mathutils import Vector
-#import mathutils
 from bpy_extras.image_utils import load_image
-#from pathlib import Path
-#import shutil
 from bpy_extras import view3d_utils
 from bpy_extras.io_utils import ImportHelper
-#from PIL import Image
 
 #--------------------------------------------------------------
 # Miscellaneous Functions
@@ -142,7 +137,6 @@ class INSTANTPROJECT_OT_setBackgroundImage(bpy.types.Operator, ImportHelper):
 		bg_image = camera.data.background_images.new()
 		bg_image.image = image
 		camera.data.background_images[0].frame_method = 'FIT'
-
 		camera.data.background_images[0].display_depth = 'FRONT'
 		return {'FINISHED'}	
 
@@ -323,6 +317,8 @@ class INSTANTPROJECT_OT_addDecalLayer(bpy.types.Operator, ImportHelper):
 	def execute(self, context):
 		# Image Loading
 		image = load_image(self.filepath, check_existing=True)
+		width = int(context.scene.render.resolution_x * self.project_resolution)
+		height = int(context.scene.render.resolution_y * self.project_resolution)
 
 		# Safety Checks
 		active_object = bpy.context.active_object
@@ -369,6 +365,11 @@ class INSTANTPROJECT_OT_addDecalLayer(bpy.types.Operator, ImportHelper):
 			decal_image_node =  nodes.new(type='ShaderNodeTexImage')
 			decal_image_node.name = 'instantproject_decal_image'	
 
+			# Create Image			
+			decal_layer_image = bpy.data.images.new(name=f'{active_object.name}_decal_image', width=width, height=height)
+			pixels = [0.0] * (4 * width * height)
+			decal_layer_image.pixels = pixels
+
 			# Repeposition Nodes		
 			material_output.location = Vector((original_bsdf.location[0] + 1200, original_bsdf.location[1]))
 			decal_mix.location = Vector((material_output.location[0] - (material_output.width + 50), material_output.location[1]))
@@ -385,22 +386,15 @@ class INSTANTPROJECT_OT_addDecalLayer(bpy.types.Operator, ImportHelper):
 			decal_bsdf = nodes.get('instantproject_decal_bsdf')
 			decal_mix = nodes.get('instantproject_decal_mix')
 			decal_image_node = nodes.get('instantproject_decal_image')	
-			self.report({'INFO'}, 'Shader already has Decal setup.')
+			self.report({'INFO'}, 'Using existing Decal Layer.')
+			decal_layer_image = decal_image_node.image
 							
-
-
 		# Assign Image as Stencil and enter Paint Mode
 		if not context.mode == 'PAINT_TEXTURE':
 			bpy.ops.object.mode_set(mode='TEXTURE_PAINT')
 
-		decal_texture = bpy.data.textures.new(name='my_texture', type='IMAGE')
-		decal_texture.image = image
-		
-		width = int(context.scene.render.resolution_x * self.project_resolution)
-		height = int(context.scene.render.resolution_y * self.project_resolution)
-		decal_layer_image = bpy.data.images.new(name='my_decal_image', width=width, height=height)
-		pixels = [0.0] * (4 * width * height)
-		decal_layer_image.pixels = pixels
+		decal_texture = bpy.data.textures.new(name=f'{image.name}_decal_texture', type='IMAGE')
+		decal_texture.image = image		
 
 		# Select Correct Image for Painting
 		decal_image_node.image = decal_layer_image
@@ -481,7 +475,6 @@ class INSTANTPROJECT_OT_removeDecalLayer(bpy.types.Operator):
 
 	def invoke(self, context, event):
 		return context.window_manager.invoke_confirm(self, event)
-
 
 #--------------------------------------------------------------
 # Interface
