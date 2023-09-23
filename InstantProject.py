@@ -1,4 +1,19 @@
 #--------------------------------------------------------------
+# To Do
+
+# Allow all shader types (just put the mix shader last duh)
+	# always use principled.
+# Collapse material sockets, hide Node options etc to cleanup shader
+# Add Shortcut to Remove Decal (return Poll in Texture Paint Mode)
+# Add Image Slot for Projection & Decal (so you can re-use already imported images without needing to open a file browser)
+# easier way to erase Decals...
+# add global transparency slider for Decals
+# add Color Grading for Decals
+# rename Mix Shader node to "Decal"
+#--------------------------------------------------------------
+
+
+#--------------------------------------------------------------
 # Meta Dictionary
 #--------------------------------------------------------------
 
@@ -29,6 +44,9 @@ from bpy_extras.io_utils import ImportHelper
 #--------------------------------------------------------------
 # Miscellaneous Functions
 #--------------------------------------------------------------
+
+def INSTANTPROJECT_FN_contextOverride(area_to_check):
+	return [area for area in bpy.context.screen.areas if area.type == area_to_check][0]
 
 def INSTANTPROJECT_FN_setShaders(nodes, links, image_file):
 	material_output = nodes.get('Material Output') # Output Node
@@ -62,7 +80,6 @@ def INSTANTPROJECT_FN_setShaders(nodes, links, image_file):
 	link = links.new(node_bump.outputs[0], node_principled_bsdf.inputs[22]) # Bump -> Color (Bump)
 
 	# Default Values
-
 	node_bump.inputs[0].default_value = 0.2
 
 	# Node Positions
@@ -94,13 +111,13 @@ def INSTANTPROJECT_FN_removeDecalLayer(self, context):
 	material_output = nodes.get('Material Output')
 	decal_mix = nodes.get('instantproject_decal_mix')
 	decal_image_node = nodes.get('instantproject_decal_image')
-	original_bsdf = nodes.get('original_bsdf')
+	original_output_shader = nodes.get('original_output_shader')
 
 	nodes.remove(decal_bsdf)
 	nodes.remove(decal_image_node)
 	nodes.remove(decal_mix)
 
-	link = links.new(original_bsdf.outputs[0], material_output.inputs[0])
+	link = links.new(original_output_shader.outputs[0], material_output.inputs[0])
 
 	brush = bpy.context.tool_settings.image_paint.brush
 	brush.texture_slot.map_mode = 'TILED'
@@ -337,28 +354,21 @@ class INSTANTPROJECT_OT_addDecalLayer(bpy.types.Operator, ImportHelper):
 
 		# Grab Relevent Nodes
 		material_output = nodes.get('Material Output')
-		original_bsdf = material_output.inputs[0].links[0].from_node
+		original_output_shader = material_output.inputs[0].links[0].from_node
 
 		# Check for Existing Decal Setup
 		if nodes.get('instantproject_decal_bsdf') is None:
 			# Safety Checks 
-			if original_bsdf == None:
-				self.report({'WARNING'}, 'No valid Node Found, aborting.')
-				return{'CANCELLED'}
-			if not original_bsdf.bl_idname in {'ShaderNodeBsdfPrincipled', 'ShaderNodeEmission', 'ShaderNodeMixShader', 'ShaderNodeAddShader', 'ShaderNodeBsdfDiffuse', 'ShaderNodeBsdfGlossy'}:
-				self.report({'WARNING'}, 'No valid Node found, aborting.')
-				return{'CANCELLED'}
+			if original_output_shader == None:
+				self.report({'WARNING'}, 'No valid Shader nodes found, aborting.')
+				return{'CANCELLED'}			
 
 			# Extend Shader
-			original_bsdf.name = 'original_bsdf'
+			original_output_shader.name = 'original_output_shader'
 			links.remove(material_output.inputs[0].links[0])
-			decal_bsdf = nodes.new(type=original_bsdf.bl_idname)
-
-			if original_bsdf.bl_idname == 'ShaderNodeEmission':
-				decal_bsdf = nodes.new(type='ShaderNodeEmission')
-			else:
-				decal_bsdf = nodes.new(type='ShaderNodeBsdfPrincipled')
-				decal_bsdf.hide = True
+			#decal_bsdf = nodes.new(type=original_output_shader.bl_idname)
+			decal_bsdf = nodes.new(type='ShaderNodeBsdfPrincipled')
+			decal_bsdf.hide = True
 			decal_bsdf.name = 'instantproject_decal_bsdf'
 			decal_mix = nodes.new(type='ShaderNodeMixShader')
 			decal_mix.name = 'instantproject_decal_mix'
@@ -366,22 +376,32 @@ class INSTANTPROJECT_OT_addDecalLayer(bpy.types.Operator, ImportHelper):
 			decal_image_node.name = 'instantproject_decal_image'	
 
 			# Create Image			
-			decal_layer_image = bpy.data.images.new(name=f'{active_object.name}_decal_image', width=width, height=height)
+			decal_layer_image = bpy.data.images.new(name=f'{active_object.name}_decal_image', width=width, height=height, alpha=True)
+			decal_layer_image.file_format= 'PNG'
+			decal_layer_image.alpha_mode = 'STRAIGHT'
 			pixels = [0.0] * (4 * width * height)
 			decal_layer_image.pixels = pixels
 
 			# Repeposition Nodes		
-			material_output.location = Vector((original_bsdf.location[0] + 1200, original_bsdf.location[1]))
+			material_output.location = Vector((original_output_shader.location[0] + 1200, original_output_shader.location[1]))
 			decal_mix.location = Vector((material_output.location[0] - (material_output.width + 50), material_output.location[1]))
 			decal_bsdf.location = Vector((decal_mix.location[0] - (decal_bsdf.width + 50), decal_mix.location[1] - 300))
 			decal_image_node.location = Vector((decal_bsdf.location[0] - 300, decal_bsdf.location[1]))
 
 			# Setup New Links
-			link = links.new(original_bsdf.outputs[0], decal_mix.inputs[1])
+			link = links.new(original_output_shader.outputs[0], decal_mix.inputs[1])
 			link = links.new(decal_bsdf.outputs[0], decal_mix.inputs[2])
 			link = links.new(decal_image_node.outputs[0], decal_bsdf.inputs[0])
 			link = links.new(decal_image_node.outputs[1], decal_mix.inputs[0])
 			link = links.new(decal_mix.outputs[0], material_output.inputs[0])
+
+			# Override and Collapse BSDF Sockets
+			area = INSTANTPROJECT_FN_contextOverride("NODE_EDITOR")								
+			with bpy.context.temp_override(area=area):	
+				bpy.ops.node.select_all(action='DESELECT')			
+				decal_bsdf.select = True
+				bpy.ops.node.hide_socket_toggle()		
+			decal_image_node.select = True
 		else:
 			decal_bsdf = nodes.get('instantproject_decal_bsdf')
 			decal_mix = nodes.get('instantproject_decal_mix')
