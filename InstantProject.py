@@ -1,8 +1,6 @@
 #--------------------------------------------------------------
 # To Do
 
-# Allow all shader types (just put the mix shader last duh)
-	# always use principled.
 # Collapse material sockets, hide Node options etc to cleanup shader
 # Add Shortcut to Remove Decal (return Poll in Texture Paint Mode)
 # Add Image Slot for Projection & Decal (so you can re-use already imported images without needing to open a file browser)
@@ -366,7 +364,6 @@ class INSTANTPROJECT_OT_addDecalLayer(bpy.types.Operator, ImportHelper):
 			# Extend Shader
 			original_output_shader.name = 'original_output_shader'
 			links.remove(material_output.inputs[0].links[0])
-			#decal_bsdf = nodes.new(type=original_output_shader.bl_idname)
 			decal_bsdf = nodes.new(type='ShaderNodeBsdfPrincipled')
 			decal_bsdf.hide = True
 			decal_bsdf.name = 'instantproject_decal_bsdf'
@@ -395,13 +392,10 @@ class INSTANTPROJECT_OT_addDecalLayer(bpy.types.Operator, ImportHelper):
 			link = links.new(decal_image_node.outputs[1], decal_mix.inputs[0])
 			link = links.new(decal_mix.outputs[0], material_output.inputs[0])
 
-			# Override and Collapse BSDF Sockets
-			area = INSTANTPROJECT_FN_contextOverride("NODE_EDITOR")								
-			with bpy.context.temp_override(area=area):	
-				bpy.ops.node.select_all(action='DESELECT')			
-				decal_bsdf.select = True
-				bpy.ops.node.hide_socket_toggle()		
-			decal_image_node.select = True
+			# Collapse BSDF Sockets
+			for node in decal_bsdf.inputs:
+				if not node.name in {'Base Color', 'Metallic', 'Specular', 'Roughness', 'Normal'}:
+					node.hide = True
 		else:
 			decal_bsdf = nodes.get('instantproject_decal_bsdf')
 			decal_mix = nodes.get('instantproject_decal_mix')
