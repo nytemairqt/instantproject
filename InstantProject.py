@@ -85,36 +85,33 @@ def INSTANTPROJECT_FN_setShaders(nodes, links, image_file):
 	node_colorramp_roughness.location = Vector((-500,-600))
 	node_bump.location = Vector((-500,-900))
 
-def INSTANTPROJECT_FN_setupCanvas(self, context):
+def INSTANTPROJECT_FN_updateDecalImage(self, context):
+	# Remove Decal 
+	if bpy.context.scene.INSTANTPROJECT_VAR_activeImage is None:
+		# use "unload decal" instead XD
+		INSTANTPROJECT_FN_unloadDecalImage()
+		return{'FINISHED'}
+
 	image = bpy.context.scene.INSTANTPROJECT_VAR_activeImage
+	INSTANTPROJECT_FN_createDecalLayer(self, context, image)
+	return{'FINISHED'}
 
-	decal_texture = bpy.data.textures.new(name=f'{image.name}_decal_texture', type='IMAGE')
-	decal_texture.image = image		
-		
-	bpy.ops.wm.tool_set_by_id(name='builtin_brush.Draw')
+def INSTANTPROJECT_FN_unloadDecalImage():	
 	brush = bpy.context.tool_settings.image_paint.brush
-	brush.texture = decal_texture
-	brush.texture_slot.map_mode = 'STENCIL'
+	brush.texture_slot.map_mode = 'TILED'
+	brush.texture = None
 
-	# Set to Image Mode for Painting (Yuck)
-	bpy.context.scene.tool_settings.image_paint.mode = 'IMAGE'
-	bpy.context.scene.tool_settings.image_paint.canvas = image
+def INSTANTPROJECT_FN_createDecalLayer(self, context, image):
+	#width = int(context.scene.render.resolution_x * self.project_resolution)
+	#height = int(context.scene.render.resolution_y * self.project_resolution)
 
-	bpy.ops.brush.stencil_reset_transform()
-	bpy.ops.brush.stencil_fit_image_aspect()
-
-	print(image.name)
-
-def INSTANTPROJECT_FN_createDecalLayer(self, context):
-	# Image Loading
-	image = load_image(self.filepath, check_existing=True)
-	width = int(context.scene.render.resolution_x * self.project_resolution)
-	height = int(context.scene.render.resolution_y * self.project_resolution)
+	width = int(context.scene.render.resolution_x * context.scene.INSTANTPROJECT_VAR_projectResolution)
+	height = int(context.scene.render.resolution_y * context.scene.INSTANTPROJECT_VAR_projectResolution)
 
 	# Safety Checks
 	active_object = bpy.context.active_object
 	if not active_object:
-		self.report({'WARNING'}, 'No active object selected.')
+		#self.report({'WARNING'}, 'No active object selected.')
 		return{'CANCELLED'}
 
 	# Create Material if Non-Existant
@@ -181,15 +178,30 @@ def INSTANTPROJECT_FN_createDecalLayer(self, context):
 		decal_bsdf = nodes.get('instantproject_decal_bsdf')
 		decal_mix = nodes.get('instantproject_decal_mix')
 		decal_image_node = nodes.get('instantproject_decal_image')	
-		self.report({'INFO'}, 'Using existing Decal Layer.')
+		#self.report({'INFO'}, 'Using existing Decal Layer.')
 		decal_layer_image = decal_image_node.image
 						
 	# Assign Image as Stencil and enter Paint Mode
 	if not context.mode == 'PAINT_TEXTURE':
 		bpy.ops.object.mode_set(mode='TEXTURE_PAINT')
 
+	decal_texture = bpy.data.textures.new(name=f'{image.name}_decal_texture', type='IMAGE')
+	decal_texture.image = image		
+		
+	bpy.ops.wm.tool_set_by_id(name='builtin_brush.Draw')
+	brush = bpy.context.tool_settings.image_paint.brush
+	brush.texture = decal_texture
+	brush.texture_slot.map_mode = 'STENCIL'
+
+	# Set to Image Mode for Painting (Yuck)
+	bpy.context.scene.tool_settings.image_paint.mode = 'IMAGE'
+	bpy.context.scene.tool_settings.image_paint.canvas = decal_layer_image
+
+	bpy.ops.brush.stencil_reset_transform()
+	bpy.ops.brush.stencil_fit_image_aspect()
+
 	# Update Image Property
-	bpy.context.scene.INSTANTPROJECT_VAR_activeImage = image
+	#bpy.context.scene.INSTANTPROJECT_VAR_activeImage = image
 	
 	return{'FINISHED'}
 
@@ -430,8 +442,11 @@ class INSTANTPROJECT_OT_addDecalLayer(bpy.types.Operator, ImportHelper):
 		return context.mode in ['PAINT_TEXTURE', 'OBJECT', 'EDIT_MESH']
 
 	def execute(self, context):	
+		# Image Loading
+		image = load_image(self.filepath, check_existing=True)
+		
 
-		INSTANTPROJECT_FN_createDecalLayer(self, context)
+		INSTANTPROJECT_FN_createDecalLayer(self, context, image)
 
 		return {'FINISHED'}		
 
@@ -453,9 +468,7 @@ class INSTANTPROJECT_OT_unloadDecal(bpy.types.Operator):
 			self.report({'WARNING'}, 'No active object selected.')
 			return{'CANCELLED'}
 		try:
-			brush = bpy.context.tool_settings.image_paint.brush
-			brush.texture_slot.map_mode = 'TILED'
-			brush.texture = None
+			INSTANTPROJECT_FN_unloadDecalImage()
 		except:
 			return{'CANCELLED'}		
 		return {'FINISHED'}	
@@ -604,7 +617,7 @@ def register():
 
 	# Variables
 	bpy.types.Scene.INSTANTPROJECT_VAR_projectResolution = bpy.props.FloatProperty(name='INSTANTPROJECT_VAR_projectResolution', default=0.25, soft_min=0.1, soft_max=1.0, description='Resolution scaling factor for projected texture.')
-	bpy.types.Scene.INSTANTPROJECT_VAR_activeImage = bpy.props.PointerProperty(type=bpy.types.Image, update=INSTANTPROJECT_FN_setupCanvas)
+	bpy.types.Scene.INSTANTPROJECT_VAR_activeImage = bpy.props.PointerProperty(type=bpy.types.Image, update=INSTANTPROJECT_FN_updateDecalImage)
 			
 def unregister():
 
