@@ -1,9 +1,6 @@
 #--------------------------------------------------------------
 # To Do
 
-# Add Shortcut to Remove Decal (return Poll in Texture Paint Mode)
-# Add Image Slot for Projection & Decal (so you can re-use already imported images without needing to open a file browser)
-# Poll for Mesh in Decal Panel draw
 # Add Bump, roughness, etc
 # Add Multiply for Opacity
 # Add Prop on Panel for Blending with Multiply
@@ -44,21 +41,6 @@ from bpy_extras.io_utils import ImportHelper
 
 def INSTANTPROJECT_FN_contextOverride(area_to_check):
 	return [area for area in bpy.context.screen.areas if area.type == area_to_check][0]
-
-def INSTANTPROJECT_FN_updateCameraBackgroundImage(self, context):
-	print("Registered camera")
-	'''
-	# Remove Decal 
-	if bpy.context.scene.INSTANTPROJECT_VAR_activeImage is None:
-		# use "unload decal" instead XD
-		INSTANTPROJECT_FN_unloadDecalImage()
-		return{'FINISHED'}
-
-	image = bpy.context.scene.INSTANTPROJECT_VAR_activeImage
-	INSTANTPROJECT_FN_createDecalLayer(self, context, image)
-
-	return{'FINISHED'}	
-	'''
 
 def INSTANTPROJECT_FN_setShaders(nodes, links, image_file):
 	material_output = nodes.get('Material Output') # Output Node
@@ -284,22 +266,31 @@ def INSTANTPROJECT_FN_updateDecalImage(self, context):
 	INSTANTPROJECT_FN_createDecalLayer(self, context, image)
 	return{'FINISHED'}
 
+def INSTANTPROJECT_FN_updateDecalOpacity(self, context):
+	active_object = bpy.context.active_object
+	nodes = active_object.data.materials[0].node_tree.nodes 
+	links = active_object.data.materials[0].node_tree.links 
+
+	nodes.get('instantproject_decal_opacity').inputs[1].default_value = context.object.INSTANTPROJECT_VAR_decalOpacity
+	return{'FINISHED'}
+
+
 def INSTANTPROJECT_FN_unloadDecalImage():	
 	brush = bpy.context.tool_settings.image_paint.brush
 	brush.texture_slot.map_mode = 'TILED'
 	brush.texture = None
 
 def INSTANTPROJECT_FN_createDecalLayer(self, context, image):
-	#width = int(context.scene.render.resolution_x * self.project_resolution)
-	#height = int(context.scene.render.resolution_y * self.project_resolution)
-
 	width = int(context.scene.render.resolution_x * context.scene.INSTANTPROJECT_VAR_projectResolution)
 	height = int(context.scene.render.resolution_y * context.scene.INSTANTPROJECT_VAR_projectResolution)
 
 	# Safety Checks
 	active_object = bpy.context.active_object
 	if not active_object:
-		#self.report({'WARNING'}, 'No active object selected.')
+		self.report({'WARNING'}, 'No active object selected.')
+		return{'CANCELLED'}
+	if not active_object.type == 'MESH':
+		self.report({'WARNING'}, 'Please select a Mesh.')
 		return{'CANCELLED'}
 
 	# Create Material if Non-Existant
@@ -320,8 +311,7 @@ def INSTANTPROJECT_FN_createDecalLayer(self, context, image):
 	# Check for Existing Decal Setup
 	if nodes.get('instantproject_decal_bsdf') is None:
 		# Safety Checks 
-		if original_output_shader == None:
-			self.report({'WARNING'}, 'No valid Shader nodes found, aborting.')
+		if original_output_shader == None:			
 			return{'CANCELLED'}			
 
 		# Extend Shader
@@ -334,6 +324,16 @@ def INSTANTPROJECT_FN_createDecalLayer(self, context, image):
 		decal_mix.name = 'instantproject_decal_mix'
 		decal_image_node =  nodes.new(type='ShaderNodeTexImage')
 		decal_image_node.name = 'instantproject_decal_image'	
+		decal_colorramp_specular = nodes.new(type='ShaderNodeValToRGB')
+		decal_colorramp_specular.name = 'instantproject_decal_colorramp_specular'
+		decal_colorramp_roughness = nodes.new(type='ShaderNodeValToRGB')
+		decal_colorramp_roughness.name = 'instantproject_decal_colorramp_roughness'
+		decal_bump = nodes.new(type='ShaderNodeBump')
+		decal_bump.name = 'instantproject_decal_bump'
+		decal_opacity = nodes.new(type='ShaderNodeMath')
+		decal_opacity.name = 'instantproject_decal_opacity'
+		decal_HSV = nodes.new(type='ShaderNodeHueSaturation')
+		decal_HSV.name = 'instantproject_decal_HSV'
 
 		# Create Image			
 		decal_layer_image = bpy.data.images.new(name=f'{active_object.name}_decal_image', width=width, height=height, alpha=True)
@@ -344,17 +344,49 @@ def INSTANTPROJECT_FN_createDecalLayer(self, context, image):
 
 		decal_image_node.image = decal_layer_image
 
+		# Default Values
+
+		decal_bump.inputs[0].default_value = 0.1
+		decal_opacity.operation = 'MULTIPLY'
+		decal_opacity.inputs[1].default_value = 1.0
+
+		decal_colorramp_roughness.color_ramp.elements[0].color = (0.7, 0.7, 0.7, 1.0)
+
 		# Repeposition Nodes		
-		material_output.location = Vector((original_output_shader.location[0] + 1200, original_output_shader.location[1]))
+		material_output.location = Vector((original_output_shader.location[0] + 1500, original_output_shader.location[1]))
 		decal_mix.location = Vector((material_output.location[0] - (material_output.width + 50), material_output.location[1]))
 		decal_bsdf.location = Vector((decal_mix.location[0] - (decal_bsdf.width + 50), decal_mix.location[1] - 300))
-		decal_image_node.location = Vector((decal_bsdf.location[0] - 300, decal_bsdf.location[1]))
+		decal_image_node.location = Vector((decal_bsdf.location[0] - 700, decal_bsdf.location[1]))
+		decal_HSV.location = Vector((decal_image_node.location[0] + 300, decal_bsdf.location[1]))
+		decal_colorramp_specular.location = Vector((decal_image_node.location[0] + 300, decal_bsdf.location[1] - 200))
+		decal_colorramp_roughness.location = Vector((decal_image_node.location[0] + 300, decal_bsdf.location[1] - 450))
+		decal_bump.location = Vector((decal_image_node.location[0] + 300, decal_bsdf.location[1] - 700))
+		decal_opacity.location = Vector((decal_image_node.location[0] + 300, decal_bsdf.location[1] + 200))
 
 		# Setup New Links
 		link = links.new(original_output_shader.outputs[0], decal_mix.inputs[1])
 		link = links.new(decal_bsdf.outputs[0], decal_mix.inputs[2])
-		link = links.new(decal_image_node.outputs[0], decal_bsdf.inputs[0])
-		link = links.new(decal_image_node.outputs[1], decal_mix.inputs[0])
+
+		link = links.new(decal_image_node.outputs[0], decal_HSV.inputs[4])
+		link = links.new(decal_HSV.outputs[0], decal_bsdf.inputs[0])
+
+		# Specular
+		link = links.new(decal_image_node.outputs[0], decal_colorramp_specular.inputs[0])
+		link = links.new(decal_colorramp_specular.outputs[0], decal_bsdf.inputs[7])
+
+		# Roughness
+		link = links.new(decal_image_node.outputs[0], decal_colorramp_roughness.inputs[0])
+		link = links.new(decal_colorramp_roughness.outputs[0], decal_bsdf.inputs[9])
+
+		# Bump
+		link = links.new(decal_image_node.outputs[0], decal_bump.inputs[2])
+		link = links.new(decal_bump.outputs[0], decal_bsdf.inputs[22])
+
+		# Alpha
+		link = links.new(decal_image_node.outputs[1], decal_opacity.inputs[0])
+		link = links.new(decal_opacity.outputs[0], decal_mix.inputs[0])
+
+		# Output
 		link = links.new(decal_mix.outputs[0], material_output.inputs[0])
 
 		# Collapse BSDF Sockets
@@ -366,8 +398,12 @@ def INSTANTPROJECT_FN_createDecalLayer(self, context, image):
 		decal_bsdf = nodes.get('instantproject_decal_bsdf')
 		decal_mix = nodes.get('instantproject_decal_mix')
 		decal_image_node = nodes.get('instantproject_decal_image')	
-		#self.report({'INFO'}, 'Using existing Decal Layer.')
 		decal_layer_image = decal_image_node.image
+		decal_colorramp_specular = nodes.get('instantproject_decal_colorramp_specular')	
+		decal_colorramp_roughness = nodes.get('instantproject_decal_colorramp_roughness')	
+		decal_bump = nodes.get('instantproject_decal_bump')	
+		decal_opacity = nodes.get('instantproject_decal_opacity')	
+		decal_HSV = nodes.get('instantproject_decal_HSV')	
 						
 	# Assign Image as Stencil and enter Paint Mode
 	if not context.mode == 'PAINT_TEXTURE':
@@ -387,9 +423,6 @@ def INSTANTPROJECT_FN_createDecalLayer(self, context, image):
 
 	bpy.ops.brush.stencil_reset_transform()
 	bpy.ops.brush.stencil_fit_image_aspect()
-
-	# Update Image Property
-	#bpy.context.scene.INSTANTPROJECT_VAR_activeImage = image
 	
 	return{'FINISHED'}
 
@@ -411,9 +444,20 @@ def INSTANTPROJECT_FN_removeDecalLayer(self, context):
 	decal_image_node = nodes.get('instantproject_decal_image')
 	original_output_shader = nodes.get('original_output_shader')
 
+	decal_colorramp_specular = nodes.get('instantproject_decal_colorramp_specular')
+	decal_colorramp_roughness = nodes.get('instantproject_decal_colorramp_roughness')
+	decal_bump = nodes.get('instantproject_decal_bump')
+	decal_HSV = nodes.get('instantproject_decal_HSV')
+	decal_opacity = nodes.get('instantproject_decal_opacity')
+
 	nodes.remove(decal_bsdf)
 	nodes.remove(decal_image_node)
 	nodes.remove(decal_mix)
+	nodes.remove(decal_colorramp_specular)
+	nodes.remove(decal_colorramp_roughness)
+	nodes.remove(decal_bump)
+	nodes.remove(decal_HSV)
+	nodes.remove(decal_opacity)
 
 	link = links.new(original_output_shader.outputs[0], material_output.inputs[0])
 
@@ -421,6 +465,8 @@ def INSTANTPROJECT_FN_removeDecalLayer(self, context):
 	brush.texture_slot.map_mode = 'TILED'
 	brush.texture = None
 	return{'FINISHED'}
+
+
 
 # Classes ---------------------- 
 
@@ -569,6 +615,8 @@ class INSTANTPROJECT_PT_panelDecalLayers(bpy.types.Panel):
 		active_object = context.active_object
 		if active_object is None:
 			return		
+		if not active_object.type == 'MESH':
+			return 		
 		layout = self.layout
 		row = layout.row()
 		button_load_decal_layer = row.operator(INSTANTPROJECT_OT_addDecalLayer.bl_idname, text='', icon='FILE_FOLDER')
@@ -580,7 +628,25 @@ class INSTANTPROJECT_PT_panelDecalLayers(bpy.types.Panel):
 			return
 		if nodes.get('instantproject_decal_mix') is not None:
 			button_hide_decal_layer = row.operator(INSTANTPROJECT_OT_toggleDecalVisibility.bl_idname, text='', icon='HIDE_ON' if nodes.get('instantproject_decal_mix').mute else 'HIDE_OFF')
-		button_remove_decal_layer = row.operator(INSTANTPROJECT_OT_removeDecalLayer.bl_idname, text='', icon_value=21)
+		button_remove_decal_layer = row.operator(INSTANTPROJECT_OT_removeDecalLayer.bl_idname, text='', icon_value=21)		
+		if nodes.get('instantproject_decal_mix') is None:
+			return 
+		box = layout.box()
+		box.enabled = True 
+		box.alert = False
+		box.scale_x = 1.0
+		box.scale_y = 1.0				
+		box.prop(context.object, "INSTANTPROJECT_VAR_decalOpacity", text='Opacity')
+		box.prop(nodes.get('instantproject_decal_HSV').inputs[0], 'default_value', text='Hue', emboss=True, slider=True)
+		box.prop(nodes.get('instantproject_decal_HSV').inputs[1], 'default_value', text='Saturation', emboss=True, slider=True)
+		box.prop(nodes.get('instantproject_decal_HSV').inputs[2], 'default_value', text='Value', emboss=True, slider=True)
+
+
+		#box.prop(layer_nodes[r"opacity"].inputs[0], 'default_value', text=r"Opacity", emboss=True, slider=True)
+		#box.prop(layer_nodes[r"blur_mix"].inputs[0], 'default_value', text=r"Blur", emboss=True, slider=True)	
+		#box.prop(layer_nodes[r"HSV"].inputs[0], 'default_value', text=r"Hue", emboss=True, slider=True)
+		#box.prop(layer_nodes[r"HSV"].inputs[1], 'default_value', text=r"Saturation", emboss=True, slider=True)
+		#box.prop(layer_nodes[r"HSV"].inputs[2], 'default_value', text=r"Value", emboss=True, slider=True)
 
 
 class INSTANTPROJECT_PT_panelFileManagement(bpy.types.Panel):
@@ -627,6 +693,7 @@ def register():
 	bpy.types.Scene.INSTANTPROJECT_VAR_cameraBackgroundImage = bpy.props.PointerProperty(name='', type=bpy.types.Image, update=INSTANTPROJECT_FN_updateCameraBackgroundImage, description='Select a Camera Background Image for Projection')
 	bpy.types.Scene.INSTANTPROJECT_VAR_projectResolution = bpy.props.FloatProperty(name='INSTANTPROJECT_VAR_projectResolution', default=0.25, soft_min=0.1, soft_max=1.0, description='Resolution scaling factor for projected texture')
 	bpy.types.Scene.INSTANTPROJECT_VAR_activeImage = bpy.props.PointerProperty(name='', type=bpy.types.Image, update=INSTANTPROJECT_FN_updateDecalImage, description='Select a Decal Image')
+	bpy.types.Object.INSTANTPROJECT_VAR_decalOpacity = bpy.props.FloatProperty(name='INSTANTPROJECT_VAR_decalOpacity', default=1.0, soft_min=0.0, soft_max=1.0, description='Decal opacity', update=INSTANTPROJECT_FN_updateDecalOpacity)
 			
 def unregister():
 
@@ -645,6 +712,7 @@ def unregister():
 	del bpy.types.Scene.INSTANTPROJECT_VAR_projectResolution
 	del bpy.types.Scene.INSTANTPROJECT_VAR_activeImage
 	del bpy.types.Scene.INSTANTPROJECT_VAR_cameraBackgroundImage
+	del bpy.types.Object.INSTANTPROJECT_VAR_decalOpacity
 
 if __name__ == '__main__':
 	register()
