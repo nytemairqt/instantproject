@@ -3,6 +3,10 @@
 
 # Add Shortcut to Remove Decal (return Poll in Texture Paint Mode)
 # Add Image Slot for Projection & Decal (so you can re-use already imported images without needing to open a file browser)
+# Poll for Mesh in Decal Panel draw
+# Add Bump, roughness, etc
+# Add Multiply for Opacity
+# Add Prop on Panel for Blending with Multiply
 #--------------------------------------------------------------
 
 
@@ -40,6 +44,21 @@ from bpy_extras.io_utils import ImportHelper
 
 def INSTANTPROJECT_FN_contextOverride(area_to_check):
 	return [area for area in bpy.context.screen.areas if area.type == area_to_check][0]
+
+def INSTANTPROJECT_FN_updateCameraBackgroundImage(self, context):
+	print("Registered camera")
+	'''
+	# Remove Decal 
+	if bpy.context.scene.INSTANTPROJECT_VAR_activeImage is None:
+		# use "unload decal" instead XD
+		INSTANTPROJECT_FN_unloadDecalImage()
+		return{'FINISHED'}
+
+	image = bpy.context.scene.INSTANTPROJECT_VAR_activeImage
+	INSTANTPROJECT_FN_createDecalLayer(self, context, image)
+
+	return{'FINISHED'}	
+	'''
 
 def INSTANTPROJECT_FN_setShaders(nodes, links, image_file):
 	material_output = nodes.get('Material Output') # Output Node
@@ -85,10 +104,179 @@ def INSTANTPROJECT_FN_setShaders(nodes, links, image_file):
 	node_colorramp_roughness.location = Vector((-500,-600))
 	node_bump.location = Vector((-500,-900))
 
+
+
+#--------------------------------------------------------------
+# Camera Projection Tools
+#--------------------------------------------------------------		
+
+# Functions ---------------------- 
+
+def INSTANTPROJECT_FN_updateCameraBackgroundImage(self, context):
+	if bpy.context.scene.INSTANTPROJECT_VAR_cameraBackgroundImage is None:
+		INSTANTPROJECT_FN_removeCameraBackgroundImage()
+		return{'FINISHED'}
+	camera = bpy.context.scene.camera
+	camera.data.show_background_images = True 
+	camera.data.background_images.clear()
+	bg_image = camera.data.background_images.new()
+	bg_image.image = bpy.context.scene.INSTANTPROJECT_VAR_cameraBackgroundImage
+	camera.data.background_images[0].frame_method = 'FIT'
+	camera.data.background_images[0].display_depth = 'FRONT'
+	return{'FINISHED'}
+
+def INSTANTPROJECT_FN_removeCameraBackgroundImage():
+	camera = bpy.context.scene.camera
+	if not camera: # Safety Check
+		self.report({'WARNING'}, 'No active scene camera.')
+		return{'CANCELLED'}	
+
+	if camera.data.show_background_images == False or len(camera.data.background_images) == 0 or camera.data.background_images[0].image is None:
+		self.report({'WARNING'}, 'No background image assigned to camera.')
+		return{'CANCELLED'}
+
+	camera.data.background_images.clear() 
+	camera.data.show_background_images = False
+
+# Classes ---------------------- 
+
+class INSTANTPROJECT_OT_setBackgroundImage(bpy.types.Operator, ImportHelper):
+	# Opens a File Browser to select an Image that will be assigned as the Active Camera's Background Image for Projection.
+	bl_idname = 'instantproject.set_background_image'
+	bl_label = ''
+	bl_options = {'REGISTER', 'UNDO'}
+	bl_description = 'Open an Camera Background Image for Projection'
+
+	filter_glob: bpy.props.StringProperty(
+			default='*.jpg;*.jpeg;*.png;*.tif;*.tiff;*.bmp;',
+			options={'HIDDEN'}
+		)
+
+	def execute(self, context):
+		# Camera Safety Check
+		camera = bpy.context.scene.camera
+		if not camera: # Safety Check
+			self.report({'WARNING'}, 'No active scene camera.')
+			return{'CANCELLED'}	
+
+		# Image Loading
+		image = load_image(self.filepath, check_existing=True)
+		bpy.context.scene.INSTANTPROJECT_VAR_cameraBackgroundImage = image
+
+		return {'FINISHED'}	
+
+class INSTANTPROJECT_OT_matchBackgroundImageResolution(bpy.types.Operator):
+	# Clears all Background Images.
+	bl_idname = 'instantproject.match_background_image_resolution'
+	bl_label = 'Match Scene Resolution to Background'
+	bl_options = {'REGISTER', 'UNDO'}
+	bl_description = 'Adjusts the Scene Resolution to match the current Background Image'
+
+	def execute(self, context):
+		# Safety Checks
+		camera = bpy.context.scene.camera
+		if camera.data.show_background_images == False or len(camera.data.background_images) == 0 or camera.data.background_images[0].image is None:
+			self.report({'WARNING'}, 'No background image assigned to camera.')
+			return{'CANCELLED'}
+
+		background_image = camera.data.background_images[0]	
+		width = background_image.image.size[0]	
+		height = background_image.image.size[1]
+		
+		bpy.data.scenes[0].render.resolution_x = width
+		bpy.data.scenes[0].render.resolution_y = height
+		return{'FINISHED'}
+
+class INSTANTPROJECT_OT_projectImage(bpy.types.Operator):
+	# Projects an edited Render from the active camera back onto the Object.
+	bl_idname = 'instantproject.project_image'
+	bl_label = 'Project Image'
+	bl_options = {'REGISTER', 'UNDO'}
+	bl_description = "Projects the Camera's Background Image onto the selected Object"
+
+	project_resolution: bpy.props.FloatProperty(name='project_resolution', default=0.25)
+
+	@classmethod
+	def poll(cls, context):
+		return context.mode in ['PAINT_TEXTURE', 'OBJECT', 'EDIT_MESH']
+	
+	def execute(self, context):
+		if bpy.context.active_object is None:
+			self.report({'WARNING'}, 'Please select a Target Object.')
+			return{'CANCELLED'}					
+		if bpy.context.scene.camera is None:
+			self.report({'WARNING'}, 'No active scene camera.')
+			return{'CANCELLED'}		
+		
+		# Safety Checks
+		active_object = bpy.context.active_object
+		camera = bpy.context.scene.camera
+		if camera.data.show_background_images == False or len(camera.data.background_images) == 0 or camera.data.background_images[0].image is None:
+			self.report({'WARNING'}, 'No background image assigned to camera.')
+			return{'CANCELLED'}
+
+		background_image = camera.data.background_images[0]	
+
+		width = int(background_image.image.size[0] * self.project_resolution)
+		height = int(background_image.image.size[1] * self.project_resolution)
+		previous_mode = context.mode
+
+		# Create Material & Unwrap
+		active_object.data.materials.clear()
+		name = f'{background_image.image.name}_projection'
+		material = bpy.data.materials.new(name=name)
+		material.use_nodes = True
+		active_object.data.materials.append(material)
+		nodes = material.node_tree.nodes
+		links = material.node_tree.links
+
+		projection_image = bpy.data.images.new(name=name, width=width, height=height)
+		pixels = [1.0] * (4 * width * height)
+		projection_image.pixels = pixels
+	
+		INSTANTPROJECT_FN_setShaders(nodes, links, projection_image)
+
+		# Select Image for Projection
+		node_albedo = nodes.get('albedo')
+		node_albedo.select = True   
+		nodes.active = node_albedo
+	    
+		if not context.mode == 'EDIT':
+			bpy.ops.object.mode_set(mode='EDIT')
+		bpy.ops.mesh.select_all(action='SELECT')	
+		#bpy.ops.uv.project_from_view(camera_bounds=True, correct_aspect=False, scale_to_bounds=True)
+		bpy.ops.uv.smart_project(scale_to_bounds=True)
+
+		if not context.mode == 'PAINT_TEXTURE':
+			bpy.ops.object.mode_set(mode='TEXTURE_PAINT')
+
+		# Set to Image Mode for Painting
+		bpy.context.scene.tool_settings.image_paint.mode = 'IMAGE'
+		bpy.context.scene.tool_settings.image_paint.canvas = projection_image		
+
+		bpy.ops.wm.tool_set_by_id(name='builtin_brush.Fill')
+		bpy.ops.paint.project_image(image=background_image.image.name)
+		bpy.ops.image.save_all_modified()
+
+		if previous_mode == 'EDIT':
+			bpy.ops.object.mode_set(mode='EDIT')
+		else:
+			bpy.ops.object.mode_set(mode='OBJECT')
+
+		# Select Albedo
+		node_albedo.select = True   
+		nodes.active = node_albedo
+		return {'FINISHED'}	
+
+# ==============================================
+# Decals
+# ==============================================
+
+# Functions ---------------------- 
+
 def INSTANTPROJECT_FN_updateDecalImage(self, context):
 	# Remove Decal 
 	if bpy.context.scene.INSTANTPROJECT_VAR_activeImage is None:
-		# use "unload decal" instead XD
 		INSTANTPROJECT_FN_unloadDecalImage()
 		return{'FINISHED'}
 
@@ -234,163 +422,79 @@ def INSTANTPROJECT_FN_removeDecalLayer(self, context):
 	brush.texture = None
 	return{'FINISHED'}
 
-#--------------------------------------------------------------
-# Camera Projection Tools
-#--------------------------------------------------------------		
-class INSTANTPROJECT_OT_setBackgroundImage(bpy.types.Operator, ImportHelper):
-	# Opens a File Browser to select an Image that will be assigned as the Active Camera's Background Image for Projection.
-	bl_idname = 'instantproject.set_background_image'
-	bl_label = 'Select Projection Image'
+# Classes ---------------------- 
+
+class INSTANTPROJECT_OT_addDecalLayer(bpy.types.Operator, ImportHelper):
+	# Loads the selected Image to the Texture Paint Texture Slot, then extends the Shader Tree to use it as a Decal
+	bl_idname = 'instantproject.load_image_and_setup_texture_mask'
+	bl_label = ''
+	bl_description = 'Open a Decal image'
 	bl_options = {'REGISTER', 'UNDO'}
-	bl_description = 'Select an Image File for Camera Projection'
 
 	filter_glob: bpy.props.StringProperty(
 			default='*.jpg;*.jpeg;*.png;*.tif;*.tiff;*.bmp;',
 			options={'HIDDEN'}
 		)
 
-	def execute(self, context):
-		# Camera Safety Check
-		camera = bpy.context.scene.camera
-		if not camera: # Safety Check
-			self.report({'WARNING'}, 'No active scene camera.')
-			return{'CANCELLED'}	
-
-		# Image Loading
-		image = load_image(self.filepath, check_existing=True)
-
-		camera.data.show_background_images = True 
-		camera.data.background_images.clear()
-		bg_image = camera.data.background_images.new()
-		bg_image.image = image
-		camera.data.background_images[0].frame_method = 'FIT'
-		camera.data.background_images[0].display_depth = 'FRONT'
-		return {'FINISHED'}	
-
-class INSTANTPROJECT_OT_matchBackgroundImageResolution(bpy.types.Operator):
-	# Clears all Background Images.
-	bl_idname = 'instantproject.match_background_image_resolution'
-	bl_label = 'Match Scene Resolution to Background'
-	bl_options = {'REGISTER', 'UNDO'}
-	bl_description = 'Adjusts the Scene Resolution to match the current Background Image'
-
-	def execute(self, context):
-		# Safety Checks
-		camera = bpy.context.scene.camera
-		if camera.data.show_background_images == False or len(camera.data.background_images) == 0 or camera.data.background_images[0].image is None:
-			self.report({'WARNING'}, 'No background image assigned to camera.')
-			return{'CANCELLED'}
-
-		background_image = camera.data.background_images[0]	
-		width = background_image.image.size[0]	
-		height = background_image.image.size[1]
-		
-		bpy.data.scenes[0].render.resolution_x = width
-		bpy.data.scenes[0].render.resolution_y = height
-		return{'FINISHED'}
-
-class INSTANTPROJECT_OT_clearBackgroundImages(bpy.types.Operator):
-	# Clears all Background Images.
-	bl_idname = 'instantproject.clear_background_image'
-	bl_label = 'Clear Projection Images'
-	bl_options = {'REGISTER', 'UNDO'}
-	bl_description = 'Removes background images from Camera.'
-
-	def execute(self, context):
-		# Camera Safety Check
-		camera = bpy.context.scene.camera
-		if not camera: # Safety Check
-			self.report({'WARNING'}, 'No active scene camera.')
-			return{'CANCELLED'}	
-
-		if camera.data.show_background_images == False or len(camera.data.background_images) == 0 or camera.data.background_images[0].image is None:
-			self.report({'WARNING'}, 'No background image assigned to camera.')
-			return{'CANCELLED'}
-
-		camera.data.background_images.clear() 
-		camera.data.show_background_images = False
-		return{'FINISHED'}
-
-class INSTANTPROJECT_OT_projectImage(bpy.types.Operator):
-	# Projects an edited Render from the active camera back onto the Object.
-	bl_idname = 'instantproject.project_image'
-	bl_label = 'Project Image'
-	bl_options = {'REGISTER', 'UNDO'}
-	bl_description = "Projects the Camera's Background Image onto the selected Object"
-
 	project_resolution: bpy.props.FloatProperty(name='project_resolution', default=0.25)
 
 	@classmethod
 	def poll(cls, context):
 		return context.mode in ['PAINT_TEXTURE', 'OBJECT', 'EDIT_MESH']
-	
-	def execute(self, context):
-		if bpy.context.active_object is None:
-			self.report({'WARNING'}, 'Please select a Target Object.')
-			return{'CANCELLED'}					
-		if bpy.context.scene.camera is None:
-			self.report({'WARNING'}, 'No active scene camera.')
-			return{'CANCELLED'}		
+
+	def execute(self, context):	
+		# Image Loading
+		image = load_image(self.filepath, check_existing=True)
 		
-		# Safety Checks
-		active_object = bpy.context.active_object
-		camera = bpy.context.scene.camera
-		if camera.data.show_background_images == False or len(camera.data.background_images) == 0 or camera.data.background_images[0].image is None:
-			self.report({'WARNING'}, 'No background image assigned to camera.')
-			return{'CANCELLED'}
+		bpy.context.scene.INSTANTPROJECT_VAR_activeImage = image
+		INSTANTPROJECT_FN_updateDecalImage(self, context)
 
-		background_image = camera.data.background_images[0]	
-
-		width = int(background_image.image.size[0] * self.project_resolution)
-		height = int(background_image.image.size[1] * self.project_resolution)
-		previous_mode = context.mode
-
-		# Create Material & Unwrap
-		active_object.data.materials.clear()
-		name = f'{background_image.image.name}_projection'
-		material = bpy.data.materials.new(name=name)
-		material.use_nodes = True
-		active_object.data.materials.append(material)
-		nodes = material.node_tree.nodes
-		links = material.node_tree.links
-
-		projection_image = bpy.data.images.new(name=name, width=width, height=height)
-		pixels = [1.0] * (4 * width * height)
-		projection_image.pixels = pixels
-	
-		INSTANTPROJECT_FN_setShaders(nodes, links, projection_image)
-
-		# Select Image for Projection
-		node_albedo = nodes.get('albedo')
-		node_albedo.select = True   
-		nodes.active = node_albedo
-	    
-		if not context.mode == 'EDIT':
-			bpy.ops.object.mode_set(mode='EDIT')
-		bpy.ops.mesh.select_all(action='SELECT')	
-		#bpy.ops.uv.project_from_view(camera_bounds=True, correct_aspect=False, scale_to_bounds=True)
-		bpy.ops.uv.smart_project(scale_to_bounds=True)
-
-		if not context.mode == 'PAINT_TEXTURE':
-			bpy.ops.object.mode_set(mode='TEXTURE_PAINT')
-
-		# Set to Image Mode for Painting
-		bpy.context.scene.tool_settings.image_paint.mode = 'IMAGE'
-		bpy.context.scene.tool_settings.image_paint.canvas = projection_image		
-
-		bpy.ops.wm.tool_set_by_id(name='builtin_brush.Fill')
-		bpy.ops.paint.project_image(image=background_image.image.name)
-		bpy.ops.image.save_all_modified()
-
-		if previous_mode == 'EDIT':
-			bpy.ops.object.mode_set(mode='EDIT')
-		else:
-			bpy.ops.object.mode_set(mode='OBJECT')
-
-		# Select Albedo
-		node_albedo.select = True   
-		nodes.active = node_albedo
 		return {'FINISHED'}	
+
+class INSTANTPROJECT_OT_toggleDecalVisibility(bpy.types.Operator):
+	# Toggles the visibility of the Decal Layer
+	bl_idname = 'instantproject.toggle_decal_visibility'
+	bl_label = 'Hide/Show Decal'
+	bl_description = 'Toggles the visibility of the Decal Layer.'
+	bl_options = {'REGISTER', 'UNDO'}
+
+	def execute(self, context):
+		active_object = bpy.context.active_object
+		if not active_object:
+			self.report({'WARNING'}, 'No active object selected.')
+			return{'CANCELLED'}
+		try:
+			nodes = active_object.data.materials[0].node_tree.nodes 
+			mix = nodes.get('instantproject_decal_mix')
+			mix.mute = 1-mix.mute
+		except:
+			return{'CANCELLED'}
+		return{'FINISHED'}
+
+class INSTANTPROJECT_OT_removeDecalLayer(bpy.types.Operator):
+	# Confirmation Popup when Deleting Decal Layer
+	bl_idname = 'instantproject.confirm_delete'
+	bl_label = 'Remove Decal'
+	bl_description = 'Removes the Decal Layer and reverts the Shader to its original state.'
+	bl_options = {'REGISTER', 'UNDO', 'INTERNAL'}
+
+	@classmethod 
+	def poll(cls, context):
+		return True 
+
+	def execute(self, context):
+		self.report({'INFO'}, "Continue.")
+		INSTANTPROJECT_FN_removeDecalLayer(self, context)
+		return{'FINISHED'}
+
+	def invoke(self, context, event):
+		return context.window_manager.invoke_confirm(self, event)
+
+#--------------------------------------------------------------
+# File Management
+#--------------------------------------------------------------
+
+# Classes ---------------------- 
 
 class INSTANTPROJECT_OT_saveAllImages(bpy.types.Operator):
 	# Saves all edited Image files.
@@ -419,102 +523,11 @@ class INSTANTPROJECT_OT_clearUnused(bpy.types.Operator):
 		bpy.ops.outliner.orphans_purge('INVOKE_DEFAULT' if True else 'EXEC_DEFAULT', num_deleted=0, do_local_ids=True, do_linked_ids=False, do_recursive=True)
 		return {'FINISHED'}
 
-# ==============================================
-# Decals
-# ==============================================
-
-class INSTANTPROJECT_OT_addDecalLayer(bpy.types.Operator, ImportHelper):
-	# Loads the selected Image to the Texture Paint Texture Slot, then extends the Shader Tree to use it as a Decal
-	bl_idname = 'instantproject.load_image_and_setup_texture_mask'
-	bl_label = 'Load Texture Mask'
-	bl_description = 'Extends the Shader Tree and assigns the selected image as a Decal'
-	bl_options = {'REGISTER', 'UNDO'}
-
-	filter_glob: bpy.props.StringProperty(
-			default='*.jpg;*.jpeg;*.png;*.tif;*.tiff;*.bmp;',
-			options={'HIDDEN'}
-		)
-
-	project_resolution: bpy.props.FloatProperty(name='project_resolution', default=0.25)
-
-	@classmethod
-	def poll(cls, context):
-		return context.mode in ['PAINT_TEXTURE', 'OBJECT', 'EDIT_MESH']
-
-	def execute(self, context):	
-		# Image Loading
-		image = load_image(self.filepath, check_existing=True)
-		
-
-		INSTANTPROJECT_FN_createDecalLayer(self, context, image)
-
-		return {'FINISHED'}		
-
-class INSTANTPROJECT_OT_unloadDecal(bpy.types.Operator):
-	# Loads the selected Image to the Texture Paint Texture Slot, then extends the Shader Tree to use it as a Decal
-	bl_idname = 'instantproject.unload_decal'
-	bl_label = 'Unload Decal'
-	bl_description = 'Unloads the Decal Image from the Stencil.'
-	bl_options = {'REGISTER', 'UNDO'}
-
-	@classmethod
-	def poll(cls, context):
-		return context.mode in ['PAINT_TEXTURE', 'OBJECT', 'EDIT_MESH']
-
-	def execute(self, context):
-		# Safety Check
-		active_object = bpy.context.active_object
-		if not active_object:
-			self.report({'WARNING'}, 'No active object selected.')
-			return{'CANCELLED'}
-		try:
-			INSTANTPROJECT_FN_unloadDecalImage()
-		except:
-			return{'CANCELLED'}		
-		return {'FINISHED'}	
-
-class INSTANTPROJECT_OT_toggleDecalVisibility(bpy.types.Operator):
-	# Toggles the visibility of the Decal Layer
-	bl_idname = 'instantproject.toggle_decal_visibility'
-	bl_label = 'Hide/Show Decal'
-	bl_description = 'Toggles the visibility of the Decal Layer.'
-	bl_options = {'REGISTER', 'UNDO'}
-
-	def execute(self, context):
-		active_object = bpy.context.active_object
-		if not active_object:
-			self.report({'WARNING'}, 'No active object selected.')
-			return{'CANCELLED'}
-		try:
-			nodes = active_object.data.materials[0].node_tree.nodes 
-			mix = nodes.get('instantproject_decal_mix')
-			mix.mute = 1-mix.mute
-		except:
-			return{'CANCELLED'}
-		return{'FINISHED'}
-
-class INSTANTPROJECT_OT_removeDecalLayer(bpy.types.Operator):
-	# Confirmation Popup when Deleting Decal Layer
-	bl_idname = 'instantproject.confirm_delete'
-	bl_label = 'This will revert the Shader, continue?'
-	bl_description = 'Removes the Decal Layer and reverts the Shader to its original state.'
-	bl_options = {'REGISTER', 'UNDO', 'INTERNAL'}
-
-	@classmethod 
-	def poll(cls, context):
-		return True 
-
-	def execute(self, context):
-		self.report({'INFO'}, "Continue.")
-		INSTANTPROJECT_FN_removeDecalLayer(self, context)
-		return{'FINISHED'}
-
-	def invoke(self, context, event):
-		return context.window_manager.invoke_confirm(self, event)
-
 #--------------------------------------------------------------
 # Interface
 #--------------------------------------------------------------
+
+# Classes ---------------------- 
 
 class INSTANTPROJECT_PT_panelMain(bpy.types.Panel):
 	bl_label = 'InstantProject'
@@ -537,16 +550,15 @@ class INSTANTPROJECT_PT_panelCameraProjection(bpy.types.Panel):
 	def draw(self, context):
 		layout = self.layout
 		row = layout.row()
-		row.operator(INSTANTPROJECT_OT_setBackgroundImage.bl_idname, text='Open Image', icon='FILE_FOLDER')
-		row.operator(INSTANTPROJECT_OT_matchBackgroundImageResolution.bl_idname, text='Match Scene', icon='RESTRICT_VIEW_OFF')
+		row.operator(INSTANTPROJECT_OT_setBackgroundImage.bl_idname, text='', icon='FILE_FOLDER')
+		row.prop(context.scene, "INSTANTPROJECT_VAR_cameraBackgroundImage", text='')
 		row = layout.row()
-		button_project_image = row.operator(INSTANTPROJECT_OT_projectImage.bl_idname, text='Project To Mesh', icon_value=727)
-		row.operator(INSTANTPROJECT_OT_clearBackgroundImages.bl_idname, text='', icon='CANCEL')			
-		row = layout.row()		
+		row.operator(INSTANTPROJECT_OT_matchBackgroundImageResolution.bl_idname, text='Match Scene', icon='RESTRICT_VIEW_OFF')		
+		button_project_image = row.operator(INSTANTPROJECT_OT_projectImage.bl_idname, text='Project To Mesh', icon_value=727)			
 		button_project_image.project_resolution = context.scene.INSTANTPROJECT_VAR_projectResolution
 
 class INSTANTPROJECT_PT_panelDecalLayers(bpy.types.Panel):
-	bl_label = 'Decal Layers'
+	bl_label = 'Decal'
 	bl_idname = 'INSTANTPROJECT_PT_panelDecalLayers'
 	bl_space_type = 'VIEW_3D'
 	bl_region_type = 'UI'
@@ -561,11 +573,7 @@ class INSTANTPROJECT_PT_panelDecalLayers(bpy.types.Panel):
 		row = layout.row()
 		button_load_decal_layer = row.operator(INSTANTPROJECT_OT_addDecalLayer.bl_idname, text='', icon='FILE_FOLDER')
 		button_load_decal_layer.project_resolution = context.scene.INSTANTPROJECT_VAR_projectResolution				
-		row.prop(context.scene, "INSTANTPROJECT_VAR_activeImage", text='')				
-		#row.prop(context.scene.tool_settings.image_paint, 'canvas', text='')
-
-		row = layout.row()				
-		button_unload_decal = row.operator(INSTANTPROJECT_OT_unloadDecal.bl_idname, text='Unload Decal', icon='CANCEL')
+		row.prop(context.scene, "INSTANTPROJECT_VAR_activeImage", text='')
 		try:
 			nodes = active_object.data.materials[0].node_tree.nodes
 		except:
@@ -600,8 +608,8 @@ classes = ()
 
 classes_interface = (INSTANTPROJECT_PT_panelMain, INSTANTPROJECT_PT_panelCameraProjection, INSTANTPROJECT_PT_panelDecalLayers, INSTANTPROJECT_PT_panelFileManagement)
 classes_functionality = (INSTANTPROJECT_OT_saveAllImages, INSTANTPROJECT_OT_clearUnused)
-classes_projection = (INSTANTPROJECT_OT_setBackgroundImage, INSTANTPROJECT_OT_matchBackgroundImageResolution, INSTANTPROJECT_OT_clearBackgroundImages, INSTANTPROJECT_OT_projectImage, )
-classes_decal = (INSTANTPROJECT_OT_addDecalLayer, INSTANTPROJECT_OT_unloadDecal, INSTANTPROJECT_OT_toggleDecalVisibility, INSTANTPROJECT_OT_removeDecalLayer)
+classes_projection = (INSTANTPROJECT_OT_setBackgroundImage, INSTANTPROJECT_OT_matchBackgroundImageResolution, INSTANTPROJECT_OT_projectImage, )
+classes_decal = (INSTANTPROJECT_OT_addDecalLayer, INSTANTPROJECT_OT_toggleDecalVisibility, INSTANTPROJECT_OT_removeDecalLayer)
 
 def register():
 
@@ -616,8 +624,9 @@ def register():
 		bpy.utils.register_class(c)
 
 	# Variables
-	bpy.types.Scene.INSTANTPROJECT_VAR_projectResolution = bpy.props.FloatProperty(name='INSTANTPROJECT_VAR_projectResolution', default=0.25, soft_min=0.1, soft_max=1.0, description='Resolution scaling factor for projected texture.')
-	bpy.types.Scene.INSTANTPROJECT_VAR_activeImage = bpy.props.PointerProperty(type=bpy.types.Image, update=INSTANTPROJECT_FN_updateDecalImage)
+	bpy.types.Scene.INSTANTPROJECT_VAR_cameraBackgroundImage = bpy.props.PointerProperty(name='', type=bpy.types.Image, update=INSTANTPROJECT_FN_updateCameraBackgroundImage, description='Select a Camera Background Image for Projection')
+	bpy.types.Scene.INSTANTPROJECT_VAR_projectResolution = bpy.props.FloatProperty(name='INSTANTPROJECT_VAR_projectResolution', default=0.25, soft_min=0.1, soft_max=1.0, description='Resolution scaling factor for projected texture')
+	bpy.types.Scene.INSTANTPROJECT_VAR_activeImage = bpy.props.PointerProperty(name='', type=bpy.types.Image, update=INSTANTPROJECT_FN_updateDecalImage, description='Select a Decal Image')
 			
 def unregister():
 
@@ -635,6 +644,7 @@ def unregister():
 
 	del bpy.types.Scene.INSTANTPROJECT_VAR_projectResolution
 	del bpy.types.Scene.INSTANTPROJECT_VAR_activeImage
+	del bpy.types.Scene.INSTANTPROJECT_VAR_cameraBackgroundImage
 
 if __name__ == '__main__':
 	register()
