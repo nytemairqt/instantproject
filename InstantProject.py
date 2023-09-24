@@ -1,13 +1,8 @@
 #--------------------------------------------------------------
 # To Do
 
-# Collapse material sockets, hide Node options etc to cleanup shader
 # Add Shortcut to Remove Decal (return Poll in Texture Paint Mode)
 # Add Image Slot for Projection & Decal (so you can re-use already imported images without needing to open a file browser)
-# easier way to erase Decals...
-# add global transparency slider for Decals
-# add Color Grading for Decals
-# rename Mix Shader node to "Decal"
 #--------------------------------------------------------------
 
 
@@ -90,8 +85,113 @@ def INSTANTPROJECT_FN_setShaders(nodes, links, image_file):
 	node_colorramp_roughness.location = Vector((-500,-600))
 	node_bump.location = Vector((-500,-900))
 
-def INSTANTPROJECT_FN_contextOverride(area_to_check):
-	return [area for area in bpy.context.screen.areas if area.type == area_to_check][0]
+def INSTANTPROJECT_FN_setupCanvas(self, context):
+	image = bpy.context.scene.INSTANTPROJECT_VAR_activeImage
+
+	decal_texture = bpy.data.textures.new(name=f'{image.name}_decal_texture', type='IMAGE')
+	decal_texture.image = image		
+		
+	bpy.ops.wm.tool_set_by_id(name='builtin_brush.Draw')
+	brush = bpy.context.tool_settings.image_paint.brush
+	brush.texture = decal_texture
+	brush.texture_slot.map_mode = 'STENCIL'
+
+	# Set to Image Mode for Painting (Yuck)
+	bpy.context.scene.tool_settings.image_paint.mode = 'IMAGE'
+	bpy.context.scene.tool_settings.image_paint.canvas = image
+
+	bpy.ops.brush.stencil_reset_transform()
+	bpy.ops.brush.stencil_fit_image_aspect()
+
+	print(image.name)
+
+def INSTANTPROJECT_FN_createDecalLayer(self, context):
+	# Image Loading
+	image = load_image(self.filepath, check_existing=True)
+	width = int(context.scene.render.resolution_x * self.project_resolution)
+	height = int(context.scene.render.resolution_y * self.project_resolution)
+
+	# Safety Checks
+	active_object = bpy.context.active_object
+	if not active_object:
+		self.report({'WARNING'}, 'No active object selected.')
+		return{'CANCELLED'}
+
+	# Create Material if Non-Existant
+	if len(active_object.data.materials) < 1:
+		material = bpy.data.materials.new(name=image.name)
+		active_object.data.materials.append(material)
+
+	# Setup Material
+	material = active_object.data.materials[0]
+	material.use_nodes = True
+	nodes = active_object.data.materials[0].node_tree.nodes 
+	links = active_object.data.materials[0].node_tree.links 
+
+	# Grab Relevent Nodes
+	material_output = nodes.get('Material Output')
+	original_output_shader = material_output.inputs[0].links[0].from_node
+
+	# Check for Existing Decal Setup
+	if nodes.get('instantproject_decal_bsdf') is None:
+		# Safety Checks 
+		if original_output_shader == None:
+			self.report({'WARNING'}, 'No valid Shader nodes found, aborting.')
+			return{'CANCELLED'}			
+
+		# Extend Shader
+		original_output_shader.name = 'original_output_shader'
+		links.remove(material_output.inputs[0].links[0])
+		decal_bsdf = nodes.new(type='ShaderNodeBsdfPrincipled')
+		decal_bsdf.hide = True
+		decal_bsdf.name = 'instantproject_decal_bsdf'
+		decal_mix = nodes.new(type='ShaderNodeMixShader')
+		decal_mix.name = 'instantproject_decal_mix'
+		decal_image_node =  nodes.new(type='ShaderNodeTexImage')
+		decal_image_node.name = 'instantproject_decal_image'	
+
+		# Create Image			
+		decal_layer_image = bpy.data.images.new(name=f'{active_object.name}_decal_image', width=width, height=height, alpha=True)
+		decal_layer_image.file_format= 'PNG'
+		decal_layer_image.alpha_mode = 'STRAIGHT'
+		pixels = [0.0] * (4 * width * height)
+		decal_layer_image.pixels = pixels
+
+		decal_image_node.image = decal_layer_image
+
+		# Repeposition Nodes		
+		material_output.location = Vector((original_output_shader.location[0] + 1200, original_output_shader.location[1]))
+		decal_mix.location = Vector((material_output.location[0] - (material_output.width + 50), material_output.location[1]))
+		decal_bsdf.location = Vector((decal_mix.location[0] - (decal_bsdf.width + 50), decal_mix.location[1] - 300))
+		decal_image_node.location = Vector((decal_bsdf.location[0] - 300, decal_bsdf.location[1]))
+
+		# Setup New Links
+		link = links.new(original_output_shader.outputs[0], decal_mix.inputs[1])
+		link = links.new(decal_bsdf.outputs[0], decal_mix.inputs[2])
+		link = links.new(decal_image_node.outputs[0], decal_bsdf.inputs[0])
+		link = links.new(decal_image_node.outputs[1], decal_mix.inputs[0])
+		link = links.new(decal_mix.outputs[0], material_output.inputs[0])
+
+		# Collapse BSDF Sockets
+		for node in decal_bsdf.inputs:
+			if not node.name in {'Base Color', 'Metallic', 'Specular', 'Roughness', 'Normal'}:
+				node.hide = True
+	else:
+		# Grab Existing Decal Setup
+		decal_bsdf = nodes.get('instantproject_decal_bsdf')
+		decal_mix = nodes.get('instantproject_decal_mix')
+		decal_image_node = nodes.get('instantproject_decal_image')	
+		self.report({'INFO'}, 'Using existing Decal Layer.')
+		decal_layer_image = decal_image_node.image
+						
+	# Assign Image as Stencil and enter Paint Mode
+	if not context.mode == 'PAINT_TEXTURE':
+		bpy.ops.object.mode_set(mode='TEXTURE_PAINT')
+
+	# Update Image Property
+	bpy.context.scene.INSTANTPROJECT_VAR_activeImage = image
+	
+	return{'FINISHED'}
 
 def INSTANTPROJECT_FN_removeDecalLayer(self, context):
 	active_object = bpy.context.active_object
@@ -264,7 +364,7 @@ class INSTANTPROJECT_OT_projectImage(bpy.types.Operator):
 
 		# Set to Image Mode for Painting
 		bpy.context.scene.tool_settings.image_paint.mode = 'IMAGE'
-		bpy.context.scene.tool_settings.image_paint.canvas = projection_image
+		bpy.context.scene.tool_settings.image_paint.canvas = projection_image		
 
 		bpy.ops.wm.tool_set_by_id(name='builtin_brush.Fill')
 		bpy.ops.paint.project_image(image=background_image.image.name)
@@ -329,101 +429,10 @@ class INSTANTPROJECT_OT_addDecalLayer(bpy.types.Operator, ImportHelper):
 	def poll(cls, context):
 		return context.mode in ['PAINT_TEXTURE', 'OBJECT', 'EDIT_MESH']
 
-	def execute(self, context):
-		# Image Loading
-		image = load_image(self.filepath, check_existing=True)
-		width = int(context.scene.render.resolution_x * self.project_resolution)
-		height = int(context.scene.render.resolution_y * self.project_resolution)
+	def execute(self, context):	
 
-		# Safety Checks
-		active_object = bpy.context.active_object
-		if not active_object:
-			self.report({'WARNING'}, 'No active object selected.')
-			return{'CANCELLED'}
+		INSTANTPROJECT_FN_createDecalLayer(self, context)
 
-		if len(active_object.data.materials) < 1:
-			material = bpy.data.materials.new(name=image.name)
-			active_object.data.materials.append(material)
-
-		material = active_object.data.materials[0]
-		material.use_nodes = True
-		nodes = active_object.data.materials[0].node_tree.nodes 
-		links = active_object.data.materials[0].node_tree.links 
-
-		# Grab Relevent Nodes
-		material_output = nodes.get('Material Output')
-		original_output_shader = material_output.inputs[0].links[0].from_node
-
-		# Check for Existing Decal Setup
-		if nodes.get('instantproject_decal_bsdf') is None:
-			# Safety Checks 
-			if original_output_shader == None:
-				self.report({'WARNING'}, 'No valid Shader nodes found, aborting.')
-				return{'CANCELLED'}			
-
-			# Extend Shader
-			original_output_shader.name = 'original_output_shader'
-			links.remove(material_output.inputs[0].links[0])
-			decal_bsdf = nodes.new(type='ShaderNodeBsdfPrincipled')
-			decal_bsdf.hide = True
-			decal_bsdf.name = 'instantproject_decal_bsdf'
-			decal_mix = nodes.new(type='ShaderNodeMixShader')
-			decal_mix.name = 'instantproject_decal_mix'
-			decal_image_node =  nodes.new(type='ShaderNodeTexImage')
-			decal_image_node.name = 'instantproject_decal_image'	
-
-			# Create Image			
-			decal_layer_image = bpy.data.images.new(name=f'{active_object.name}_decal_image', width=width, height=height, alpha=True)
-			decal_layer_image.file_format= 'PNG'
-			decal_layer_image.alpha_mode = 'STRAIGHT'
-			pixels = [0.0] * (4 * width * height)
-			decal_layer_image.pixels = pixels
-
-			# Repeposition Nodes		
-			material_output.location = Vector((original_output_shader.location[0] + 1200, original_output_shader.location[1]))
-			decal_mix.location = Vector((material_output.location[0] - (material_output.width + 50), material_output.location[1]))
-			decal_bsdf.location = Vector((decal_mix.location[0] - (decal_bsdf.width + 50), decal_mix.location[1] - 300))
-			decal_image_node.location = Vector((decal_bsdf.location[0] - 300, decal_bsdf.location[1]))
-
-			# Setup New Links
-			link = links.new(original_output_shader.outputs[0], decal_mix.inputs[1])
-			link = links.new(decal_bsdf.outputs[0], decal_mix.inputs[2])
-			link = links.new(decal_image_node.outputs[0], decal_bsdf.inputs[0])
-			link = links.new(decal_image_node.outputs[1], decal_mix.inputs[0])
-			link = links.new(decal_mix.outputs[0], material_output.inputs[0])
-
-			# Collapse BSDF Sockets
-			for node in decal_bsdf.inputs:
-				if not node.name in {'Base Color', 'Metallic', 'Specular', 'Roughness', 'Normal'}:
-					node.hide = True
-		else:
-			decal_bsdf = nodes.get('instantproject_decal_bsdf')
-			decal_mix = nodes.get('instantproject_decal_mix')
-			decal_image_node = nodes.get('instantproject_decal_image')	
-			self.report({'INFO'}, 'Using existing Decal Layer.')
-			decal_layer_image = decal_image_node.image
-							
-		# Assign Image as Stencil and enter Paint Mode
-		if not context.mode == 'PAINT_TEXTURE':
-			bpy.ops.object.mode_set(mode='TEXTURE_PAINT')
-
-		decal_texture = bpy.data.textures.new(name=f'{image.name}_decal_texture', type='IMAGE')
-		decal_texture.image = image		
-
-		# Select Correct Image for Painting
-		decal_image_node.image = decal_layer_image
-			
-		bpy.ops.wm.tool_set_by_id(name='builtin_brush.Draw')
-		brush = bpy.context.tool_settings.image_paint.brush
-		brush.texture = decal_texture
-		brush.texture_slot.map_mode = 'STENCIL'
-
-		# Set to Image Mode for Painting (Yuck)
-		bpy.context.scene.tool_settings.image_paint.mode = 'IMAGE'
-		bpy.context.scene.tool_settings.image_paint.canvas = decal_layer_image
-
-		bpy.ops.brush.stencil_reset_transform()
-		bpy.ops.brush.stencil_fit_image_aspect()
 		return {'FINISHED'}		
 
 class INSTANTPROJECT_OT_unloadDecal(bpy.types.Operator):
@@ -536,9 +545,13 @@ class INSTANTPROJECT_PT_panelDecalLayers(bpy.types.Panel):
 		if active_object is None:
 			return		
 		layout = self.layout
-		row = layout.row()		
-		button_load_decal_layer = row.operator(INSTANTPROJECT_OT_addDecalLayer.bl_idname, text='Load Decal', icon_value=727)
+		row = layout.row()
+		button_load_decal_layer = row.operator(INSTANTPROJECT_OT_addDecalLayer.bl_idname, text='', icon='FILE_FOLDER')
 		button_load_decal_layer.project_resolution = context.scene.INSTANTPROJECT_VAR_projectResolution				
+		row.prop(context.scene, "INSTANTPROJECT_VAR_activeImage", text='')				
+		#row.prop(context.scene.tool_settings.image_paint, 'canvas', text='')
+
+		row = layout.row()				
 		button_unload_decal = row.operator(INSTANTPROJECT_OT_unloadDecal.bl_idname, text='Unload Decal', icon='CANCEL')
 		try:
 			nodes = active_object.data.materials[0].node_tree.nodes
@@ -547,6 +560,7 @@ class INSTANTPROJECT_PT_panelDecalLayers(bpy.types.Panel):
 		if nodes.get('instantproject_decal_mix') is not None:
 			button_hide_decal_layer = row.operator(INSTANTPROJECT_OT_toggleDecalVisibility.bl_idname, text='', icon='HIDE_ON' if nodes.get('instantproject_decal_mix').mute else 'HIDE_OFF')
 		button_remove_decal_layer = row.operator(INSTANTPROJECT_OT_removeDecalLayer.bl_idname, text='', icon_value=21)
+
 
 class INSTANTPROJECT_PT_panelFileManagement(bpy.types.Panel):
 	bl_label = 'File Management'
@@ -590,7 +604,7 @@ def register():
 
 	# Variables
 	bpy.types.Scene.INSTANTPROJECT_VAR_projectResolution = bpy.props.FloatProperty(name='INSTANTPROJECT_VAR_projectResolution', default=0.25, soft_min=0.1, soft_max=1.0, description='Resolution scaling factor for projected texture.')
-
+	bpy.types.Scene.INSTANTPROJECT_VAR_activeImage = bpy.props.PointerProperty(type=bpy.types.Image, update=INSTANTPROJECT_FN_setupCanvas)
 			
 def unregister():
 
@@ -607,6 +621,7 @@ def unregister():
 	# Variables
 
 	del bpy.types.Scene.INSTANTPROJECT_VAR_projectResolution
+	del bpy.types.Scene.INSTANTPROJECT_VAR_activeImage
 
 if __name__ == '__main__':
 	register()
