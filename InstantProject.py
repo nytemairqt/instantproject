@@ -1,9 +1,8 @@
 #--------------------------------------------------------------
 # To Do
 
-# Add Bump, roughness, etc
-# Add Multiply for Opacity
-# Add Prop on Panel for Blending with Multiply
+# Project to Mesh throws an exception if active object is a camera 
+
 #--------------------------------------------------------------
 
 
@@ -189,6 +188,9 @@ class INSTANTPROJECT_OT_projectImage(bpy.types.Operator):
 		if bpy.context.scene.camera is None:
 			self.report({'WARNING'}, 'No active scene camera.')
 			return{'CANCELLED'}		
+		if not bpy.context.active_object.type == 'MESH':
+			self.report({'WARNING'}, 'Active Object is not a Mesh.')
+			return{'CANCELLED'}
 		
 		# Safety Checks
 		active_object = bpy.context.active_object
