@@ -95,8 +95,8 @@ def INSTANTPROJECT_FN_setShaders(nodes, links, image_file):
 
 def INSTANTPROJECT_FN_updateCameraBackgroundImage(self, context):
 	if bpy.context.scene.INSTANTPROJECT_VAR_cameraBackgroundImage is None:
-		INSTANTPROJECT_FN_removeCameraBackgroundImage()
-		return{'FINISHED'}
+		INSTANTPROJECT_FN_removeCameraBackgroundImage(self, context)
+		return
 	camera = bpy.context.scene.camera
 	camera.data.show_background_images = True 
 	camera.data.background_images.clear()
@@ -104,18 +104,13 @@ def INSTANTPROJECT_FN_updateCameraBackgroundImage(self, context):
 	bg_image.image = bpy.context.scene.INSTANTPROJECT_VAR_cameraBackgroundImage
 	camera.data.background_images[0].frame_method = 'FIT'
 	camera.data.background_images[0].display_depth = 'FRONT'
-	return{'FINISHED'}
 
-def INSTANTPROJECT_FN_removeCameraBackgroundImage():
+def INSTANTPROJECT_FN_removeCameraBackgroundImage(self, context):
 	camera = bpy.context.scene.camera
 	if not camera: # Safety Check
-		self.report({'WARNING'}, 'No active scene camera.')
 		return{'CANCELLED'}	
-
 	if camera.data.show_background_images == False or len(camera.data.background_images) == 0 or camera.data.background_images[0].image is None:
-		self.report({'WARNING'}, 'No background image assigned to camera.')
 		return{'CANCELLED'}
-
 	camera.data.background_images.clear() 
 	camera.data.show_background_images = False
 
@@ -262,20 +257,15 @@ def INSTANTPROJECT_FN_updateDecalImage(self, context):
 	# Remove Decal 
 	if bpy.context.scene.INSTANTPROJECT_VAR_activeImage is None:
 		INSTANTPROJECT_FN_unloadDecalImage()
-		return{'FINISHED'}
-
+		return
 	image = bpy.context.scene.INSTANTPROJECT_VAR_activeImage
 	INSTANTPROJECT_FN_createDecalLayer(self, context, image)
-	return{'FINISHED'}
 
 def INSTANTPROJECT_FN_updateDecalOpacity(self, context):
 	active_object = bpy.context.active_object
 	nodes = active_object.data.materials[0].node_tree.nodes 
 	links = active_object.data.materials[0].node_tree.links 
-
 	nodes.get('instantproject_decal_opacity').inputs[1].default_value = context.object.INSTANTPROJECT_VAR_decalOpacity
-	return{'FINISHED'}
-
 
 def INSTANTPROJECT_FN_unloadDecalImage():	
 	brush = bpy.context.tool_settings.image_paint.brush
