@@ -1,8 +1,6 @@
 #--------------------------------------------------------------
 # To Do
 
-# Project to Mesh throws an exception if active object is a camera 
-
 #--------------------------------------------------------------
 
 
@@ -13,7 +11,7 @@
 bl_info = {
 	'name' : 'InstantProject',
 	'author' : 'SceneFiller',
-	'version' : (1, 0, 6),
+	'version' : (1, 0, 0),
 	'blender' : (3, 3, 0),
 	'location' : 'View3d > Tool',
 	'warning' : '',
